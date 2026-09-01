@@ -21,20 +21,22 @@ tool, not bash").
 
 Two mechanisms, applied automatically in every session:
 
-1. **Search-tool registration (root fix).** Registers tools named `grep`,
-   `find`, and `ls` (skipped if already registered). Their presence flips pi's
-   `hasGrep`/`hasFind`/`hasLs` check, so the conflicting bash guideline is
-   **never generated**. Each tool always has a working fs-based implementation
-   (`extensions/search.ts`); visibility is toggled per capability — hidden
-   while its FFF counterpart (`ffgrep`/`fffind`) is active, visible as a
-   fallback when pi-fff is not installed.
-2. **System-prompt injection (fallback + rules).** On every agent start,
-   appends an idempotent "Tool Discipline" section to the system prompt:
-   content search with `ffgrep`, path search with `fffind`, file reads with
-   `read` (offset/limit), no bash `grep`/`rg`/`find`/`ls`/`cat`/`sed`/`head`/
-   `tail`/`which` for searching, bash reserved for pipelines/git/npm/network,
-   `rg` (never `grep`) as the last resort. Also strips the default bash
-   guideline text in environments where the registration is disabled.
+1. **Activate search tools (root fix).** pi 0.84+ ships real `grep` / `find` /
+   `ls` built-in tool definitions but only activates `read`/`bash`/`edit`/
+   `write` by default. This extension activates the built-ins, so pi's
+   `hasGrep`/`hasFind`/`hasLs` check passes and the conflicting
+   `Use bash for file operations like ls, rg, find` guideline is **never
+   generated** — the model is never told to use bash for searching. On older
+   pi versions without these built-ins, fs-based fallbacks
+   (`extensions/search.ts`) are registered instead (visible only when
+   `ffgrep`/`fffind` from pi-fff are absent).
+2. **System-prompt injection (rules).** On every agent start, appends an
+   idempotent "Tool Discipline" section to the system prompt: content search
+   with `ffgrep`, path search with `fffind`, file reads with `read`
+   (offset/limit), no bash `grep`/`rg`/`find`/`ls`/`cat`/`sed`/`head`/`tail`/
+   `which` for searching, bash reserved for pipelines/git/npm/network, `rg`
+   (never `grep`) as the last resort. Also strips the bash guideline text as
+   a belt-and-suspenders fallback.
 
 ## Install
 
@@ -58,10 +60,16 @@ You can also inspect the system prompt: the string
 
 ## Security
 
-This extension runs with full system access like any pi extension. It only
-registers inert placeholder tools and appends text to the system prompt; it
-does not execute commands, read files, or touch network. Review the source in
-`extensions/index.ts` before installing.
+This extension runs with full system access like any pi extension. What it does:
+- Activates pi's built-in `grep`/`find`/`ls` tools (read-only file search).
+- Injects text into the system prompt (discipline rules).
+- On pi versions without built-in search tools, registers read-only fs-based
+  fallback implementations that read file contents under the searched path.
+
+It never writes files, executes commands, or touches the network. Note that
+any installed tool, including this one, can be invoked by the model; the
+fallback search tools only read. Review the source in `extensions/` before
+installing.
 
 ## License
 

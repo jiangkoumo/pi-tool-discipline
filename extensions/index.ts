@@ -13,12 +13,14 @@
  *   rules that say to use the grep tool instead.
  *
  * How it works:
- *   A. Registers working search tools named `grep` / `find` / `ls` (skipped
- *      when already registered). Their presence flips pi's hasGrep/hasFind/
- *      hasLs check, so the conflicting bash guideline is never generated.
- *      Each tool is always functional (fs-based, see search.ts); visibility
- *      is toggled via promptSnippet — hidden while its FFF counterpart
- *      (ffgrep / fffind) is active, visible as a fallback when it is not.
+ *   A. Ensures `grep` / `find` / `ls` tools are ACTIVE in the session. pi 0.84+
+ *      ships real built-in definitions (createAllToolDefinitions) but only
+ *      activates read/bash/edit/write by default — this extension activates
+ *      the built-ins, so pi's hasGrep/hasFind/hasLs check passes and the
+ *      conflicting bash guideline is never generated, and the model always has
+ *      search tools. On older pi versions without the built-ins, fs-based
+ *      fallbacks (search.ts) are registered instead (visible only when the
+ *      FFF counterpart ffgrep/fffind is absent).
  *   B. On before_agent_start, appends the tool-discipline rules to the system
  *      prompt (idempotent) and strips the bash guideline text as a fallback.
  */
@@ -105,23 +107,29 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 	// Done in session_start: action methods (getAllTools/registerTool) are not
 	// available during extension loading, and tools registered here are
 	// refreshed into the session (and system prompt) immediately.
-	pi.on("session_start", (event, ctx) => {
+	pi.on("session_start", () => {
 		const all = new Set(pi.getAllTools().map((t) => t.name));
-		// Use ACTIVE tools (respects --exclude-tools / allowed lists), not the
-		// full registry: getAllTools() still reports excluded tools.
 		const active = new Set(pi.getActiveTools());
-		// Decide per capability so partial FFF availability (e.g. only ffgrep
-		// active) still leaves a real fallback for the missing side.
 		const hasFfgrep = active.has("ffgrep");
 		const hasFffind = active.has("fffind");
+
+		// 1) Activate built-in grep/find/ls when they exist (pi 0.84+ ships real
+		//    definitions via createAllToolDefinitions but only activates
+		//    read/bash/edit/write by default). Activating them flips
+		//    hasGrep/hasFind/hasLs so the bash guideline is never generated, and
+		//    gives the model real built-in search tools.
+		const toActivate = PLACEHOLDER_NAMES.filter((name) => all.has(name) && !active.has(name));
+		if (toActivate.length > 0) {
+			// setActiveTools rebuilds the system prompt immediately.
+			pi.setActiveTools([...active, ...toActivate]);
+		}
+
+		// 2) Older pi without built-in grep/find/ls: register working fs-based
+		//    fallbacks (search.ts). Visibility is per-capability: hidden while
+		//    the FFF counterpart is active, visible when it is not.
 		let registeredAny = false;
-		// All three names always get a WORKING implementation (no inert
-		// placeholders — a refreshed tool can be called by the model, so an
-		// empty implementation would be a trap). Visibility toggles via
-		// promptSnippet: hidden when the FFF counterpart is active, visible
-		// (with a fallback hint) when it is not.
 		const registerSearchTool = (name: string, fffActive: boolean) => {
-			if (all.has(name)) return; // already registered by another extension
+			if (all.has(name)) return; // built-in exists — handled above
 			const fallback = FALLBACK_TOOLS[name];
 			pi.registerTool({
 				name,
@@ -146,10 +154,9 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 		registerSearchTool("find", hasFffind);
 		registerSearchTool("ls", hasFffind);
 		// Tools registered in session_start do not enter selectedTools until the
-		// registry is refreshed. Without this, pi keeps injecting the bash
-		// guideline (verified empirically on pi 0.84.4). refreshTools exists at
-		// runtime (ExtensionActions) but is not declared on ExtensionAPI's type.
-		// Known limitation: with peer version "*", other pi versions may differ.
+		// registry is refreshed. refreshTools exists at runtime (ExtensionActions)
+		// but is not declared on ExtensionAPI's type. Known limitation: with peer
+		// version "*", other pi versions may differ.
 		if (registeredAny) (pi as unknown as { refreshTools: () => void }).refreshTools();
 	});
 
@@ -161,7 +168,7 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 		return { systemPrompt: `${prompt}\n${MARK}\n${DISCIPLINE}` };
 	});
 
-	// Status command: /tool-discipline — verify tool registration and injection.
+	// Status command: /tool-discipline — verify tool activation and injection.
 	pi.registerCommand("tool-discipline", {
 		description: "Show pi-tool-discipline status (tools + injected guideline)",
 		handler: async (_args, ctx) => {
@@ -169,13 +176,13 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 			const active = new Set(pi.getActiveTools());
 			const fff = FFF_TOOLS.filter((name) => active.has(name));
 			const registered = PLACEHOLDER_NAMES.filter((n) => all.has(n));
-			const visible = PLACEHOLDER_NAMES.filter((n) => active.has(n));
+			const activeTools = PLACEHOLDER_NAMES.filter((n) => active.has(n));
 			const injected = ctx.getSystemPrompt().includes(MARK);
 			ctx.ui.notify(
 				`pi-tool-discipline\n` +
 					`fff active: ${fff.length > 0 ? fff.join(", ") : "(none)"}\n` +
-					`grep/find/ls registered: ${registered.length > 0 ? registered.join(", ") : "(none)"}\n` +
-					`visible to model: ${visible.length > 0 ? visible.join(", ") : "(none)"}\n` +
+					`grep/find/ls defined: ${registered.length > 0 ? registered.join(", ") : "(none)"}\n` +
+					`grep/find/ls active: ${activeTools.length > 0 ? activeTools.join(", ") : "(none)"}\n` +
 					`discipline injected: ${injected ? "yes" : "no"}`,
 				"info",
 			);
