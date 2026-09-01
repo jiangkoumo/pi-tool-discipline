@@ -6,7 +6,7 @@ import { strict as assert } from "assert";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { grepFiles, findFiles, listDir } from "../extensions/search.ts";
+import { grepFiles, findFiles, listDir, walk } from "../extensions/search.ts";
 import { stripBashGuidelines } from "../extensions/strip.ts";
 
 let passed = 0;
@@ -25,7 +25,7 @@ try {
 	mkdirSync(join(dir, "empty"));
 	mkdirSync(join(dir, "wide"), { recursive: true });
 	let long = "";
-	for (let i = 0; i < 2000; i++) long += `match line ${i} with padding text\n`;
+	for (let i = 0; i < 2000; i++) long += `match line ${i} with padding text to fill the output past fifty kilobytes\n`;
 	writeFileSync(join(dir, "wide", "long.txt"), long);
 
 	await t("grep basic (case-insensitive)", async () => {
@@ -107,6 +107,41 @@ try {
 		} finally {
 			chmodSync(locked, 0o755);
 		}
+	});
+
+	await t("walk fs-error catch aborts deterministically (injected fs)", async () => {
+		// Inject fs ops whose readdir rejects AFTER aborting the signal, so
+		// walk's catch runs with the signal already aborted and must reject
+		// rather than surface the fs error.
+		const out = [];
+		const state = { visited: 0, capped: false };
+		const ac = new AbortController();
+		await assert.rejects(
+			walk("/injected", out, state, ac.signal, 0, {
+				readdir: async () => {
+					ac.abort();
+					throw new Error("EACCES: permission denied");
+				},
+				lstat: async () => {
+					throw new Error("should not be called");
+				},
+			}),
+			/Operation aborted/,
+		);
+		assert.equal(state.rootError, undefined, "fs error not surfaced");
+	});
+
+	await t("oversized path error stays within byte ceiling", async () => {
+		const huge = "/" + "x".repeat(200 * 1024); // ~200KB path
+		const out = await grepFiles({ pattern: "hello", path: huge, cwd: dir });
+		assert.ok(out.startsWith("Error: search path not found"), out.slice(0, 60));
+		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
+	});
+
+	await t("maxResults is hard-capped internally", async () => {
+		const out = await grepFiles({ pattern: "match line", maxResults: 1e9, cwd: join(dir, "wide") });
+		assert.ok(out.includes("match line"), "returns matches");
+		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
 	});
 
 	await t("depth-capped output stays within byte ceiling", async () => {
