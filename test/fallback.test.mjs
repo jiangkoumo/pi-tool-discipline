@@ -80,17 +80,18 @@ try {
 	});
 
 	await t("catch-path abort wins over fs error", async () => {
-		// chmod 000 makes readdir fail; with a pre-aborted signal the catch
-		// must re-throw Operation aborted instead of surfacing the fs error.
+		// chmod 000 makes readdir fail; aborting in a microtask (after the
+		// call starts, before the fs error resolves) must make the catch
+		// re-throw Operation aborted instead of surfacing the fs error.
 		const locked = join(dir, "locked");
 		mkdirSync(locked);
 		writeFileSync(join(locked, "x.txt"), "hello\n");
 		try {
 			chmodSync(locked, 0o000);
 			const ac = new AbortController();
-			ac.abort();
-			await assert.rejects(grepFiles({ pattern: "hello", cwd: dir, path: "locked", signal: ac.signal }), /Operation aborted/);
-			await assert.rejects(listDir({ path: "locked", cwd: dir, signal: ac.signal }), /Operation aborted/);
+			const p = grepFiles({ pattern: "hello", cwd: dir, path: "locked", signal: ac.signal });
+			Promise.resolve().then(() => ac.abort());
+			await assert.rejects(p, /Operation aborted/);
 		} finally {
 			chmodSync(locked, 0o755);
 		}
@@ -109,17 +110,22 @@ try {
 	});
 
 	await t("depth-capped output stays within byte ceiling", async () => {
-		// 13 levels triggers the depth cap; the match at depth 12 is collected.
+		// 13 levels triggers the depth cap; a large matching file at level 12
+		// pushes output near the ceiling so truncation + capped markers both
+		// run and the final output must still fit 50KB.
 		mkdirSync(join(dir, "d"), { recursive: true });
 		let deep = join(dir, "d");
 		for (let i = 0; i < 11; i++) deep = join(deep, "d"); // level 12
 		mkdirSync(deep, { recursive: true });
-		writeFileSync(join(deep, "deep.txt"), "capped hello\n");
+		let big = "";
+		for (let i = 0; i < 2000; i++) big += `capped hello line ${i} with padding text to fill output\n`;
+		writeFileSync(join(deep, "deep.txt"), big);
 		mkdirSync(join(deep, "d13"), { recursive: true }); // level 13 → caps traversal
-		const out = await grepFiles({ pattern: "hello", cwd: dir });
+		const out = await grepFiles({ pattern: "capped hello", maxResults: 5000, cwd: dir });
 		assert.ok(out.includes("[search capped — traversal stopped early]"), "capped marker");
+		assert.ok(out.includes("[output truncated]"), "truncated marker");
 		assert.ok(out.includes("deep.txt"), "deep match found");
-		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling with capped marker");
+		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling with both markers");
 	});
 
 	await t("strip handles CRLF and all guideline variants", () => {

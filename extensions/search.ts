@@ -70,13 +70,16 @@ async function walk(dir: string, out: string[], state: WalkState, signal?: Abort
 			const lst = await lstat(p);
 			throwIfAborted(signal);
 			if (lst.isSymbolicLink()) continue; // never follow symlinks
-			if (lst.isDirectory()) await walk(p, out, state, signal, depth + 1);
-			else if (lst.isFile()) out.push(p); // regular files only
+			if (lst.isDirectory()) {
+				await walk(p, out, state, signal, depth + 1);
+				throwIfAborted(signal);
+			} else if (lst.isFile()) out.push(p); // regular files only
 		} catch (error: any) {
-			if (error?.message === "Operation aborted") throw error;
+			throwIfAborted(signal); // cancellation wins over the fs error
 			// unreadable entries are skipped
 		}
 	}
+	throwIfAborted(signal); // post-recursion check
 }
 
 /**
@@ -126,13 +129,16 @@ export async function grepFiles(opts: {
 	const pattern = opts.caseSensitive ? opts.pattern : opts.pattern.toLowerCase();
 	const limit = opts.maxResults ?? 100;
 	const { files, state } = await walkFiles(root, opts.signal);
+	throwIfAborted(opts.signal);
 	if (state.rootError) return `Error: cannot read search root ${root}: ${state.rootError}`;
 	const matches: FileMatch[] = [];
 	for (const file of files) {
 		throwIfAborted(opts.signal);
 		if (matches.length >= limit) break;
 		try {
-			if ((await stat(file)).size > MAX_FILE_BYTES) continue; // cap only before reading content
+			const size = (await stat(file)).size;
+			throwIfAborted(opts.signal);
+			if (size > MAX_FILE_BYTES) continue; // cap only before reading content
 		} catch (error: any) {
 			throwIfAborted(opts.signal);
 			continue;
@@ -175,6 +181,7 @@ export async function findFiles(opts: {
 	const root = await resolveRoot(opts.cwd, opts.path, opts.signal);
 	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const { files, state } = await walkFiles(root, opts.signal);
+	throwIfAborted(opts.signal);
 	if (state.rootError) return `Error: cannot read search root ${root}: ${state.rootError}`;
 	const needle = opts.pattern?.toLowerCase();
 	// Match against the RELATIVE path so a pattern matching an ancestor
