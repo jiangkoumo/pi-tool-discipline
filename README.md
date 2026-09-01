@@ -21,18 +21,20 @@ tool, not bash").
 
 Two mechanisms, applied automatically in every session:
 
-1. **Placeholder tools (root fix).** Registers placeholder tools named
-   `grep`, `find`, and `ls` (skipped if already registered). They carry no
-   prompt snippet, so they never appear in the model's tool list and are never
-   callable in practice. Their mere presence flips pi's `hasGrep`/`hasFind`/
-   `hasLs` check, so the conflicting bash guideline is **never generated**.
+1. **Search-tool registration (root fix).** Registers tools named `grep`,
+   `find`, and `ls` (skipped if already registered). Their presence flips pi's
+   `hasGrep`/`hasFind`/`hasLs` check, so the conflicting bash guideline is
+   **never generated**. Each tool always has a working fs-based implementation
+   (`extensions/search.ts`); visibility is toggled per capability — hidden
+   while its FFF counterpart (`ffgrep`/`fffind`) is active, visible as a
+   fallback when pi-fff is not installed.
 2. **System-prompt injection (fallback + rules).** On every agent start,
    appends an idempotent "Tool Discipline" section to the system prompt:
    content search with `ffgrep`, path search with `fffind`, file reads with
    `read` (offset/limit), no bash `grep`/`rg`/`find`/`ls`/`cat`/`sed`/`head`/
-   `tail`/`which` for searching, bash reserved for pipelines/git/npm/network.
-   Also strips the default bash guideline text in environments where the
-   placeholder registration is disabled.
+   `tail`/`which` for searching, bash reserved for pipelines/git/npm/network,
+   `rg` (never `grep`) as the last resort. Also strips the default bash
+   guideline text in environments where the registration is disabled.
 
 ## Install
 
