@@ -22,7 +22,7 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
       - run: npm ci
