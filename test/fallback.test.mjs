@@ -148,28 +148,35 @@ try {
 		writeFileSync(join(capDir, "c.txt"), short);
 		const out = await grepFiles({ pattern: "cap", maxResults: 1e9, cwd: capDir });
 		const lines = out.trim().split("\n");
-		assert.equal(lines.length, 1000, "exactly 1000 results");
+		assert.equal(lines.length, 1000, "exactly 1000 grep results");
 		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
-		const fout = await findFiles({ maxResults: 1e9, cwd: capDir });
-		assert.ok(fout.includes("c.txt"), "find returns files");
+		// findFiles ceiling: more than 1000 files, short names → exact count.
+		const manyDir = join(dir, "many");
+		mkdirSync(manyDir);
+		for (let i = 0; i < 1200; i++) writeFileSync(join(manyDir, `f${String(i).padStart(4, "0")}.txt`), "x\n");
+		const fout = await findFiles({ maxResults: 1e9, cwd: manyDir });
+		assert.equal(fout.trim().split("\n").length, 1000, "exactly 1000 find results");
 	});
 
-	await t("NaN maxResults falls back to default", async () => {
+	await t("NaN maxResults falls back to default (100)", async () => {
 		const out = await grepFiles({ pattern: "cap", maxResults: Number.NaN, cwd: join(dir, "cap") });
-		assert.ok(out.includes("cap0"), "returns matches with default limit");
-		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
-		const fout = await findFiles({ maxResults: Number.NaN, cwd: dir });
-		assert.ok(fout.length > 0, "find works with NaN maxResults");
+		assert.equal(out.trim().split("\n").length, 100, "grep NaN → 100 results");
+		const fout = await findFiles({ maxResults: Number.NaN, cwd: join(dir, "many") });
+		assert.equal(fout.trim().split("\n").length, 100, "find NaN → 100 results");
 	});
 
 	await t("multibyte truncation stays within byte ceiling", async () => {
+		// Lines are ASCII-prefixed then CJK; the 50KB cut lands inside the CJK
+		// run, exercising the split-codepoint trim-back path. No U+FFFD may
+		// appear and the byte ceiling must hold.
 		const mbDir = join(dir, "mb");
 		mkdirSync(mbDir);
 		let mb = "";
-		for (let i = 0; i < 2000; i++) mb += `匹配行 ${i} 中文内容填充 padding\n`;
+		for (let i = 0; i < 250; i++) mb += `${"x".repeat(100)}${"中".repeat(45)}\n`;
 		writeFileSync(join(mbDir, "m.txt"), mb);
-		const out = await grepFiles({ pattern: "匹配行", maxResults: 1e9, cwd: mbDir });
+		const out = await grepFiles({ pattern: "x", maxResults: 1e9, cwd: mbDir });
 		assert.ok(out.includes("[output truncated]"), "truncated marker");
+		assert.ok(!out.includes("\uFFFD"), "no replacement character");
 		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling with multibyte");
 	});
 
