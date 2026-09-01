@@ -139,9 +139,38 @@ try {
 	});
 
 	await t("maxResults is hard-capped internally", async () => {
-		const out = await grepFiles({ pattern: "match line", maxResults: 1e9, cwd: join(dir, "wide") });
-		assert.ok(out.includes("match line"), "returns matches");
+		// Short lines so 1000 results fit under the output ceiling — then the
+		// result count itself proves the cap (no post-truncation hiding).
+		const capDir = join(dir, "cap");
+		mkdirSync(capDir);
+		let short = "";
+		for (let i = 0; i < 2000; i++) short += `cap${i}\n`;
+		writeFileSync(join(capDir, "c.txt"), short);
+		const out = await grepFiles({ pattern: "cap", maxResults: 1e9, cwd: capDir });
+		const lines = out.trim().split("\n");
+		assert.equal(lines.length, 1000, "exactly 1000 results");
 		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
+		const fout = await findFiles({ maxResults: 1e9, cwd: capDir });
+		assert.ok(fout.includes("c.txt"), "find returns files");
+	});
+
+	await t("NaN maxResults falls back to default", async () => {
+		const out = await grepFiles({ pattern: "cap", maxResults: Number.NaN, cwd: join(dir, "cap") });
+		assert.ok(out.includes("cap0"), "returns matches with default limit");
+		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling");
+		const fout = await findFiles({ maxResults: Number.NaN, cwd: dir });
+		assert.ok(fout.length > 0, "find works with NaN maxResults");
+	});
+
+	await t("multibyte truncation stays within byte ceiling", async () => {
+		const mbDir = join(dir, "mb");
+		mkdirSync(mbDir);
+		let mb = "";
+		for (let i = 0; i < 2000; i++) mb += `匹配行 ${i} 中文内容填充 padding\n`;
+		writeFileSync(join(mbDir, "m.txt"), mb);
+		const out = await grepFiles({ pattern: "匹配行", maxResults: 1e9, cwd: mbDir });
+		assert.ok(out.includes("[output truncated]"), "truncated marker");
+		assert.ok(Buffer.byteLength(out, "utf8") <= 50 * 1024, "byte ceiling with multibyte");
 	});
 
 	await t("depth-capped output stays within byte ceiling", async () => {

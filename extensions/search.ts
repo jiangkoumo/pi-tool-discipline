@@ -12,6 +12,12 @@ const MAX_VISITED = 5000; // total entries touched, bounds slow/odd trees
 const MAX_FILE_BYTES = 1024 * 1024; // content search skips files larger than 1 MiB
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_RESULTS = 1000; // hard ceiling for matches/results
+
+/** Normalize maxResults: non-finite/non-number falls back to the default. */
+function clampLimit(raw: number | undefined): number {
+	const n = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : 100;
+	return Math.min(Math.max(1, n), MAX_RESULTS);
+}
 const TRUNCATE_MARKER = "\n[output truncated]";
 const CAPPED_MARKER = "\n[search capped — traversal stopped early]";
 
@@ -107,7 +113,10 @@ function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES, extraMarkerBytes = 
 	if (buf.length + extraMarkerBytes <= maxBytes) return text;
 	const budget = maxBytes - Buffer.byteLength(TRUNCATE_MARKER) - extraMarkerBytes;
 	if (budget <= 0) return TRUNCATE_MARKER.trim();
-	const cut = buf.subarray(0, budget).toString("utf8");
+	let cut = buf.subarray(0, budget).toString("utf8");
+	// A multibyte char split by subarray becomes U+FFFD (3 bytes) which can
+	// exceed the budget — trim back to a valid encoded prefix.
+	while (Buffer.byteLength(cut, "utf8") > budget) cut = cut.slice(0, -1);
 	const lastNewline = cut.lastIndexOf("\n");
 	if (lastNewline <= 0) return `${cut}${TRUNCATE_MARKER}`; // no complete line: bounded prefix + marker
 	return `${cut.slice(0, lastNewline)}\n${TRUNCATE_MARKER}`;
@@ -144,8 +153,8 @@ export async function grepFiles(opts: {
 	if (!root) return truncate(`Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`);
 	const pattern = opts.caseSensitive ? opts.pattern : opts.pattern.toLowerCase();
 	// Hard internal ceiling: bounds memory/work even for direct API calls that
-	// bypass schema validation.
-	const limit = Math.min(Math.max(1, opts.maxResults ?? 100), MAX_RESULTS);
+	// bypass schema validation (NaN/Infinity included).
+	const limit = clampLimit(opts.maxResults);
 	const { files, state } = await walkFiles(root, opts.signal);
 	throwIfAborted(opts.signal);
 	if (state.rootError) return truncate(`Error: cannot read search root ${root}: ${state.rootError}`);
@@ -202,7 +211,7 @@ export async function findFiles(opts: {
 	throwIfAborted(opts.signal);
 	if (state.rootError) return truncate(`Error: cannot read search root ${root}: ${state.rootError}`);
 	const needle = opts.pattern?.toLowerCase();
-	const resultLimit = Math.min(Math.max(1, opts.maxResults ?? 100), MAX_RESULTS);
+	const resultLimit = clampLimit(opts.maxResults);
 	// Match against the RELATIVE path so a pattern matching an ancestor
 	// directory does not hit every file, and rendered output stays relative.
 	const rel: string[] = [];
