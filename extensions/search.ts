@@ -1,8 +1,8 @@
 /**
  * Fallback search implementations for environments without @ff-labs/pi-fff.
- * Pure Node fs-based; no shell, no external deps.
+ * Pure Node fs-based (async, abort-aware); no shell, no external deps.
  */
-import { readdirSync, readFileSync, statSync, lstatSync } from "fs";
+import { readdir, readFile, stat, lstat } from "fs/promises";
 import { join, resolve, relative } from "path";
 import { Type } from "typebox";
 
@@ -12,6 +12,7 @@ const MAX_VISITED = 5000; // total entries touched, bounds slow/odd trees
 const MAX_FILE_BYTES = 1024 * 1024; // content search skips files larger than 1 MiB
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const TRUNCATE_MARKER = "\n[output truncated]";
+const CAPPED_MARKER = "\n[search capped — traversal stopped early]";
 
 interface FileMatch {
 	file: string;
@@ -19,30 +20,44 @@ interface FileMatch {
 	text: string;
 }
 
+interface WalkState {
+	visited: number;
+	capped: boolean;
+}
+
 /**
- * Collect regular files under dir (depth-limited, symlink-safe, bounded).
- * Only isFile() entries are collected — FIFOs, devices, sockets can block a
- * synchronous read. Synchronous by design (fallback tools, low frequency);
- * the walk is bounded by MAX_FILES/MAX_VISITED so it cannot hang forever.
- * Does NOT filter by size — path search must find large files too.
+ * Collect regular files under dir (depth-limited, symlink-safe, bounded,
+ * abort-aware). Only isFile() entries are collected — FIFOs, devices, sockets
+ * would block a read. Individual OS filesystem requests may still be
+ * uninterruptible, but traversal checks the signal between operations.
  */
-function walk(dir: string, out: string[], state: { visited: number }, depth = 0): void {
-	if (depth > 12 || state.visited >= MAX_VISITED) return;
+async function walk(dir: string, out: string[], state: WalkState, signal?: AbortSignal, depth = 0): Promise<void> {
+	if (depth > 12 || state.visited >= MAX_VISITED) {
+		state.capped = true;
+		return;
+	}
 	let entries: string[];
 	try {
-		entries = readdirSync(dir);
+		entries = await readdir(dir);
 	} catch {
 		return;
 	}
 	for (const entry of entries) {
-		if (out.length >= MAX_FILES || state.visited >= MAX_VISITED) return; // in-loop bound
+		if (signal?.aborted) {
+			state.capped = true;
+			return;
+		}
+		if (out.length >= MAX_FILES || state.visited >= MAX_VISITED) {
+			state.capped = true;
+			return; // in-loop bound
+		}
 		if (entry.startsWith(".") || SKIP_DIRS.has(entry)) continue;
 		const p = join(dir, entry);
 		state.visited++;
 		try {
-			const lst = lstatSync(p);
+			const lst = await lstat(p);
 			if (lst.isSymbolicLink()) continue; // never follow symlinks
-			if (lst.isDirectory()) walk(p, out, state, depth + 1);
+			if (lst.isDirectory()) await walk(p, out, state, signal, depth + 1);
 			else if (lst.isFile()) out.push(p); // regular files only
 		} catch {
 			// unreadable entries are skipped
@@ -61,29 +76,46 @@ function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES): string {
 	return `${cut.slice(0, lastNewline)}\n${TRUNCATE_MARKER}`;
 }
 
-export function grepFiles(opts: {
+async function resolveRoot(cwd: string, sub?: string): Promise<string | null> {
+	const root = resolve(cwd, sub || ".");
+	try {
+		const st = await stat(root);
+		return st.isDirectory() ? root : null;
+	} catch {
+		return null;
+	}
+}
+
+export async function grepFiles(opts: {
 	pattern: string;
 	path?: string;
 	caseSensitive?: boolean;
 	maxResults?: number;
 	cwd: string;
-}): string {
-	const root = resolve(opts.cwd, opts.path || ".");
+	signal?: AbortSignal;
+}): Promise<string> {
+	const root = await resolveRoot(opts.cwd, opts.path);
+	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const pattern = opts.caseSensitive ? opts.pattern : opts.pattern.toLowerCase();
 	const limit = opts.maxResults ?? 100;
 	const files: string[] = [];
-	walk(root, files, { visited: 0 });
+	const state: WalkState = { visited: 0, capped: false };
+	await walk(root, files, state, opts.signal);
 	const matches: FileMatch[] = [];
 	for (const file of files) {
+		if (opts.signal?.aborted) {
+			state.capped = true;
+			break;
+		}
 		if (matches.length >= limit) break;
 		try {
-			if (statSync(file).size > MAX_FILE_BYTES) continue; // cap only before reading content
+			if ((await stat(file)).size > MAX_FILE_BYTES) continue; // cap only before reading content
 		} catch {
 			continue;
 		}
 		let content: string;
 		try {
-			content = readFileSync(file, "utf8");
+			content = await readFile(file, "utf8");
 		} catch {
 			continue;
 		}
@@ -96,31 +128,45 @@ export function grepFiles(opts: {
 			}
 		}
 	}
-	if (matches.length === 0) return "No matches found";
+	if (matches.length === 0) return state.capped ? `No matches found${CAPPED_MARKER}` : "No matches found";
 	let out = "";
 	for (const m of matches) out += `${m.file}:${m.line}: ${m.text}\n`;
-	return truncate(out);
+	out = truncate(out);
+	return state.capped ? `${out}${CAPPED_MARKER}` : out;
 }
 
-export function findFiles(opts: { pattern?: string; path?: string; maxResults?: number; cwd: string }): string {
-	const root = resolve(opts.cwd, opts.path || ".");
+export async function findFiles(opts: {
+	pattern?: string;
+	path?: string;
+	maxResults?: number;
+	cwd: string;
+	signal?: AbortSignal;
+}): Promise<string> {
+	const root = await resolveRoot(opts.cwd, opts.path);
+	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const files: string[] = [];
-	walk(root, files, { visited: 0 });
+	const state: WalkState = { visited: 0, capped: false };
+	await walk(root, files, state, opts.signal);
 	const needle = opts.pattern?.toLowerCase();
 	// Match against the RELATIVE path so a pattern matching an ancestor
 	// directory does not hit every file, and rendered output stays relative.
 	const rel = files.map((f) => relative(root, f));
 	const hits = needle ? rel.filter((r) => r.toLowerCase().includes(needle)) : rel;
-	if (hits.length === 0) return "No matching files found";
-	return truncate(hits.slice(0, opts.maxResults ?? 100).join("\n"));
+	if (hits.length === 0) return state.capped ? `No matching files found${CAPPED_MARKER}` : "No matching files found";
+	let out = truncate(hits.slice(0, opts.maxResults ?? 100).join("\n"));
+	if (state.capped) out += CAPPED_MARKER;
+	return out;
 }
 
-export function listDir(opts: { path?: string; cwd: string }): string {
-	const dir = resolve(opts.cwd, opts.path || ".");
+export async function listDir(opts: { path?: string; cwd: string }): Promise<string> {
+	const root = await resolveRoot(opts.cwd, opts.path);
+	if (!root) return `Error: directory not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	try {
-		return truncate(readdirSync(dir).join("\n"));
+		const entries = await readdir(root);
+		if (entries.length === 0) return "(empty directory)";
+		return truncate(entries.join("\n"));
 	} catch (error: any) {
-		return `Error listing ${dir}: ${error.message}`;
+		return `Error listing ${root}: ${error.message}`;
 	}
 }
 

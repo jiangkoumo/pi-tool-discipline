@@ -28,8 +28,9 @@ Two mechanisms, applied automatically in every session:
    `Use bash for file operations like ls, rg, find` guideline is **never
    generated** — the model is never told to use bash for searching. On older
    pi versions without these built-ins, fs-based fallbacks
-   (`extensions/search.ts`) are registered instead (visible only when
-   `ffgrep`/`fffind` from pi-fff are absent).
+   (`extensions/search.ts`) are registered instead, with their text snippet
+   suppressed while `ffgrep`/`fffind` from pi-fff are active (the registered
+   tool schema remains present either way).
 2. **System-prompt injection (rules).** On every agent start, appends an
    idempotent "Tool Discipline" section to the system prompt: content search
    with `ffgrep`, path search with `fffind`, file reads with `read`
@@ -46,8 +47,9 @@ pi install npm:pi-tool-discipline
 pi -e npm:pi-tool-discipline
 ```
 
-Requires `@ff-labs/pi-fff` (or any other extension providing `ffgrep`/`fffind`)
-for the discipline to point at real search tools.
+Requires nothing extra. With `@ff-labs/pi-fff` installed, the model prefers
+`ffgrep`/`fffind`; without it, Pi's built-in `grep`/`find`/`ls` tools (activated
+by this extension, or fs-based fallbacks on older pi versions) are used.
 
 ## Verify
 
@@ -66,10 +68,15 @@ This extension runs with full system access like any pi extension. What it does:
 - On pi versions without built-in search tools, registers read-only fs-based
   fallback implementations that read file contents under the searched path.
 
-It never writes files, executes commands, or touches the network. Note that
-any installed tool, including this one, can be invoked by the model; the
-fallback search tools only read. Review the source in `extensions/` before
-installing.
+**Disclosure:** pi's built-in `grep`/`find` tools execute the `rg`/`fd`
+binaries, and pi may auto-download those binaries from GitHub on first use
+(`ensureTool`). This extension itself does not execute commands, write files,
+or touch the network — that claim covers only its own fs-based fallback
+implementations, not the pi built-ins it activates.
+
+The fallback search tools only read. Note that any installed tool, including
+this one, can be invoked by the model. Review the source in `extensions/`
+before installing.
 
 ## License
 

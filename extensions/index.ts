@@ -37,24 +37,14 @@ const PLACEHOLDER_NAMES = ["grep", "find", "ls"] as const;
 /** FFF search tools that indicate pi-fff (or equivalent) is installed. */
 const FFF_TOOLS = ["ffgrep", "fffind"];
 
-/**
- * The exact guidelines pi's builder injects when no search tool is active.
- * Stripped from the system prompt as a fallback (plan B).
- */
-const BASH_GUIDELINES = [
-	"Use bash for file operations like ls, rg, find",
-	"Use bash or PowerShell for file operations like listing, searching, and finding files",
-	"Use PowerShell for file operations like listing, searching, and finding files",
-];
-
 const DISCIPLINE = `
 ## Tool Discipline (pi-tool-discipline)
 
 Search tool priority:
 
 1. ffgrep / fffind (from @ff-labs/pi-fff) — always preferred. They work with absolute paths outside the workspace and support regex / path / exclude filters.
-2. Without pi-fff, use the grep / find / ls TOOLS (fallbacks provided by this extension). If a search seems to miss something, adjust its parameters (path, caseSensitive, maxResults) — never fall back to bash's grep or find.
-3. Never run bash \`grep\` or \`find\`. Never use bash \`ls\`/\`cat\`/\`head\`/\`tail\`/\`sed\`/\`which\` directly for searching or reading — use ffgrep / fffind / read (or the grep/find/ls fallback tools) instead.
+2. Without pi-fff, use the grep / find / ls TOOLS (Pi built-ins on pi 0.84+, fs fallbacks on older versions). Fill their parameters according to each tool's declared schema — built-in grep uses ignoreCase/limit, built-in find uses a glob pattern. Never fall back to bash's grep or find.
+3. Never run bash \`grep\` or \`find\`. Never use bash \`ls\`/\`cat\`/\`head\`/\`tail\`/\`sed\`/\`which\` directly for searching or reading — use ffgrep / fffind / read (or the grep/find/ls tools) instead.
 4. Read files with \`read\` (offset/limit for large files).
 5. Bash stays allowed only when dedicated tools cannot do the job: pipelines, git, npm, running programs, network requests, file mutations.
 6. If bash searching is truly unavoidable, use \`rg\` (never \`grep\`).`;
@@ -64,7 +54,7 @@ interface FallbackTool {
 	description: string;
 	snippet: string;
 	parameters: ReturnType<typeof Type.Object>;
-	execute: (params: any, cwd: string) => string;
+	execute: (params: any, cwd: string, signal?: AbortSignal) => Promise<string>;
 }
 
 const FALLBACK_TOOLS: Record<string, FallbackTool> = {
@@ -74,7 +64,7 @@ const FALLBACK_TOOLS: Record<string, FallbackTool> = {
 			"Search file contents for a text pattern. Fallback for environments without ffgrep; prefer ffgrep when available.",
 		snippet: "Search file contents (fallback when ffgrep is unavailable)",
 		parameters: grepSchema,
-		execute: (params, cwd) => grepFiles({ ...params, cwd }),
+		execute: async (params, cwd, signal) => grepFiles({ ...params, cwd, signal }),
 	},
 	find: {
 		label: "find (fallback)",
@@ -82,7 +72,7 @@ const FALLBACK_TOOLS: Record<string, FallbackTool> = {
 			"Find files by path/name substring. Fallback for environments without fffind; prefer fffind when available.",
 		snippet: "Find files by path/name (fallback when fffind is unavailable)",
 		parameters: findSchema,
-		execute: (params, cwd) => findFiles({ ...params, cwd }),
+		execute: async (params, cwd, signal) => findFiles({ ...params, cwd, signal }),
 	},
 	ls: {
 		label: "ls (fallback)",
@@ -90,16 +80,27 @@ const FALLBACK_TOOLS: Record<string, FallbackTool> = {
 			"List directory entries. Fallback for environments without fffind; prefer fffind when available.",
 		snippet: "List directory entries (fallback when fffind is unavailable)",
 		parameters: lsSchema,
-		execute: (params, cwd) => listDir({ ...params, cwd }),
+		execute: async (params, cwd) => listDir({ ...params, cwd }),
 	},
 };
 
+/**
+ * Strip only the exact generated guideline bullets (with the "- " prefix), so
+ * quoted references inside project instructions or custom prompts are not
+ * rewritten. Activation normally prevents pi from generating these anyway;
+ * this is a belt-and-suspenders fallback.
+ */
 function stripBashGuidelines(prompt: string): string {
-	let out = prompt;
-	for (const guideline of BASH_GUIDELINES) {
-		out = out.replaceAll(guideline, "Use ffgrep/fffind for file operations like ls, rg, find");
-	}
-	return out;
+	return prompt
+		.replace("- Use bash for file operations like ls, rg, find", "- Use ffgrep/fffind for file operations like ls, rg, find")
+		.replace(
+			"- Use bash or PowerShell for file operations like listing, searching, and finding files",
+			"- Use ffgrep/fffind for file operations like listing, searching, and finding files",
+		)
+		.replace(
+			"- Use PowerShell for file operations like listing, searching, and finding files",
+			"- Use ffgrep/fffind for file operations like listing, searching, and finding files",
+		);
 }
 
 export default function toolDiscipline(pi: ExtensionAPI) {
@@ -140,8 +141,8 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 					"Use ffgrep/fffind when they are available; grep/find/ls are fallbacks only for environments without pi-fff.",
 				],
 				parameters: fallback.parameters,
-				async execute(_toolCallId, params, _signal, _onUpdate, execCtx) {
-					const text = fallback.execute(params ?? {}, execCtx.cwd);
+				async execute(_toolCallId, params, signal, _onUpdate, execCtx) {
+					const text = await fallback.execute(params ?? {}, execCtx.cwd, signal);
 					return {
 						content: [{ type: "text", text }],
 						details: { fallback: true },
