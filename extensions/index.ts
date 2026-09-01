@@ -44,19 +44,14 @@ const BASH_GUIDELINES = [
 const DISCIPLINE = `
 ## Tool Discipline (pi-tool-discipline)
 
-Tool priority for search (always use the highest available):
+Search tool priority:
 
-- Content search: ffgrep (tool) > rg (bash) > grep (bash)
-- Path search: fffind (tool) > find (bash)
-
-Rules:
-
-- Search and read files ONLY with dedicated tools, never with bash commands.
-- ffgrep/fffind work with absolute paths outside the workspace (separate index), and ffgrep supports regex, path and exclude filters. If a search seems to miss something, adjust its parameters (path, exclude, regex, caseSensitive) — do NOT fall back to bash \`grep\`/\`rg\`/\`find\`/\`ls\`.
-- Read files with \`read\` (use \`offset\`/\`limit\` for large files); never use bash \`cat\`/\`head\`/\`tail\`/\`sed\` to read.
-- Do NOT use the bash tool for \`grep\`/\`rg\`/\`find\`/\`ls\`/\`cat\`/\`sed\`/\`head\`/\`tail\`/\`which\` searches or file reads.
-- Bash stays allowed only when dedicated tools cannot do the job: pipelines, git, npm, running programs, network requests, file mutations.
-- If bash searching is truly unavoidable, prefer \`rg\` over \`grep\`.`;
+1. ffgrep / fffind (from @ff-labs/pi-fff) — always preferred. They work with absolute paths outside the workspace and support regex / path / exclude filters.
+2. If ffgrep/fffind cannot do the job, search with a dedicated grep/find TOOL and adjusted parameters (path, exclude, regex) — never with bash's grep or find.
+3. Never run bash \`grep\` or \`find\`. Never use bash \`ls\`/\`cat\`/\`head\`/\`tail\`/\`sed\`/\`which\` directly for searching or reading — use ffgrep / fffind / read instead.
+4. Read files with \`read\` (offset/limit for large files).
+5. Bash stays allowed only when dedicated tools cannot do the job: pipelines, git, npm, running programs, network requests, file mutations.
+6. If bash searching is truly unavoidable, use \`rg\` (never \`grep\`).`;
 
 function stripBashGuidelines(prompt: string): string {
 	let out = prompt;
