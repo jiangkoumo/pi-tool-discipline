@@ -44,10 +44,15 @@ const BASH_GUIDELINES = [
 const DISCIPLINE = `
 ## Tool Discipline (pi-tool-discipline)
 
-Search and read files with dedicated tools, not bash:
+Tool priority for search (always use the highest available):
 
-- Content search: use \`ffgrep\`. Path search: use \`fffind\`.
-- Read files with \`read\` (use \`offset\`/\`limit\` for large files).
+- Content search: ffgrep (tool) > rg (bash) > grep (bash)
+- Path search: fffind (tool) > find (bash)
+
+Rules:
+
+- Read files with \`read\` (use \`offset\`/\`limit\` for large files); do not use bash \`cat\`/\`head\`/\`tail\`/\`sed\` for reading.
+- Do not use bash \`ls\` for listing; use \`fffind\` (empty pattern lists the directory).
 - Do NOT use the bash tool for \`grep\`/\`rg\`/\`find\`/\`ls\`/\`cat\`/\`sed\`/\`head\`/\`tail\`/\`which\` searches or file reads.
 - Bash stays allowed only when dedicated tools cannot do the job: pipelines, git, npm, running programs, network requests, file mutations.
 - If bash searching is truly unavoidable, prefer \`rg\` over \`grep\`.`;
