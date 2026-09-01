@@ -27,6 +27,7 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
       - name: Check registry version
         id: registry
         shell: bash

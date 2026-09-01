@@ -28,6 +28,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { grepFiles, findFiles, listDir, grepSchema, findSchema, lsSchema } from "./search.js";
+import { stripBashGuidelines } from "./strip.js";
 
 const MARK = "<!-- pi-tool-discipline:v1 -->";
 
@@ -80,28 +81,9 @@ const FALLBACK_TOOLS: Record<string, FallbackTool> = {
 			"List directory entries. Fallback for environments without fffind; prefer fffind when available.",
 		snippet: "List directory entries (fallback when fffind is unavailable)",
 		parameters: lsSchema,
-		execute: async (params, cwd) => listDir({ ...params, cwd }),
+		execute: async (params, cwd, signal) => listDir({ ...params, cwd, signal }),
 	},
 };
-
-/**
- * Strip only the exact generated guideline bullets (with the "- " prefix), so
- * quoted references inside project instructions or custom prompts are not
- * rewritten. Activation normally prevents pi from generating these anyway;
- * this is a belt-and-suspenders fallback.
- */
-function stripBashGuidelines(prompt: string): string {
-	return prompt
-		.replace("- Use bash for file operations like ls, rg, find", "- Use ffgrep/fffind for file operations like ls, rg, find")
-		.replace(
-			"- Use bash or PowerShell for file operations like listing, searching, and finding files",
-			"- Use ffgrep/fffind for file operations like listing, searching, and finding files",
-		)
-		.replace(
-			"- Use PowerShell for file operations like listing, searching, and finding files",
-			"- Use ffgrep/fffind for file operations like listing, searching, and finding files",
-		);
-}
 
 export default function toolDiscipline(pi: ExtensionAPI) {
 	// A. Register search-tool names so pi stops generating the bash guideline.

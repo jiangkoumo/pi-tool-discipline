@@ -14,6 +14,15 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const TRUNCATE_MARKER = "\n[output truncated]";
 const CAPPED_MARKER = "\n[search capped — traversal stopped early]";
 
+/** Cancellation error, matching pi built-in tools ("Operation aborted"). */
+function abortError(): Error {
+	return new Error("Operation aborted");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw abortError();
+}
+
 interface FileMatch {
 	file: string;
 	line: number;
@@ -23,15 +32,19 @@ interface FileMatch {
 interface WalkState {
 	visited: number;
 	capped: boolean;
+	rootError?: string;
 }
 
 /**
  * Collect regular files under dir (depth-limited, symlink-safe, bounded,
  * abort-aware). Only isFile() entries are collected — FIFOs, devices, sockets
  * would block a read. Individual OS filesystem requests may still be
- * uninterruptible, but traversal checks the signal between operations.
+ * uninterruptible, but the signal is checked before/after every operation.
+ * A failure to read the REQUESTED ROOT (depth 0) is recorded in rootError;
+ * nested unreadable entries are skipped.
  */
 async function walk(dir: string, out: string[], state: WalkState, signal?: AbortSignal, depth = 0): Promise<void> {
+	throwIfAborted(signal);
 	if (depth > 12 || state.visited >= MAX_VISITED) {
 		state.capped = true;
 		return;
@@ -39,14 +52,12 @@ async function walk(dir: string, out: string[], state: WalkState, signal?: Abort
 	let entries: string[];
 	try {
 		entries = await readdir(dir);
-	} catch {
+	} catch (error: any) {
+		if (depth === 0) state.rootError = error?.message ?? String(error);
 		return;
 	}
+	throwIfAborted(signal);
 	for (const entry of entries) {
-		if (signal?.aborted) {
-			state.capped = true;
-			return;
-		}
 		if (out.length >= MAX_FILES || state.visited >= MAX_VISITED) {
 			state.capped = true;
 			return; // in-loop bound
@@ -56,20 +67,26 @@ async function walk(dir: string, out: string[], state: WalkState, signal?: Abort
 		state.visited++;
 		try {
 			const lst = await lstat(p);
+			throwIfAborted(signal);
 			if (lst.isSymbolicLink()) continue; // never follow symlinks
 			if (lst.isDirectory()) await walk(p, out, state, signal, depth + 1);
 			else if (lst.isFile()) out.push(p); // regular files only
-		} catch {
+		} catch (error: any) {
+			if (error?.message === "Operation aborted") throw error;
 			// unreadable entries are skipped
 		}
 	}
 }
 
-/** Truncate by BYTE length, keep complete lines, reserve space for the marker. */
-function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES): string {
+/**
+ * Truncate by BYTE length, keep complete lines, reserve space for all markers.
+ * Returns the original text unchanged when it fits within maxBytes.
+ */
+function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES, extraMarkerBytes = 0): string {
 	const buf = Buffer.from(text, "utf8");
-	const budget = maxBytes - Buffer.byteLength(TRUNCATE_MARKER);
-	if (buf.length <= budget) return text;
+	if (buf.length <= maxBytes) return text;
+	const budget = maxBytes - Buffer.byteLength(TRUNCATE_MARKER) - extraMarkerBytes;
+	if (budget <= 0) return TRUNCATE_MARKER.trim();
 	const cut = buf.subarray(0, budget).toString("utf8");
 	const lastNewline = cut.lastIndexOf("\n");
 	if (lastNewline <= 0) return TRUNCATE_MARKER.trim(); // nothing complete fits
@@ -86,6 +103,12 @@ async function resolveRoot(cwd: string, sub?: string): Promise<string | null> {
 	}
 }
 
+function walkFiles(root: string, signal?: AbortSignal): Promise<{ files: string[]; state: WalkState }> {
+	const files: string[] = [];
+	const state: WalkState = { visited: 0, capped: false };
+	return walk(root, files, state, signal).then(() => ({ files, state }));
+}
+
 export async function grepFiles(opts: {
 	pattern: string;
 	path?: string;
@@ -94,33 +117,33 @@ export async function grepFiles(opts: {
 	cwd: string;
 	signal?: AbortSignal;
 }): Promise<string> {
+	throwIfAborted(opts.signal);
 	const root = await resolveRoot(opts.cwd, opts.path);
 	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const pattern = opts.caseSensitive ? opts.pattern : opts.pattern.toLowerCase();
 	const limit = opts.maxResults ?? 100;
-	const files: string[] = [];
-	const state: WalkState = { visited: 0, capped: false };
-	await walk(root, files, state, opts.signal);
+	const { files, state } = await walkFiles(root, opts.signal);
+	if (state.rootError) return `Error: cannot read search root ${root}: ${state.rootError}`;
 	const matches: FileMatch[] = [];
 	for (const file of files) {
-		if (opts.signal?.aborted) {
-			state.capped = true;
-			break;
-		}
+		throwIfAborted(opts.signal);
 		if (matches.length >= limit) break;
 		try {
 			if ((await stat(file)).size > MAX_FILE_BYTES) continue; // cap only before reading content
 		} catch {
 			continue;
 		}
+		throwIfAborted(opts.signal);
 		let content: string;
 		try {
 			content = await readFile(file, "utf8");
 		} catch {
 			continue;
 		}
+		throwIfAborted(opts.signal);
 		const lines = content.split("\n");
 		for (let i = 0; i < lines.length; i++) {
+			throwIfAborted(opts.signal);
 			const haystack = opts.caseSensitive ? lines[i] : lines[i].toLowerCase();
 			if (haystack.includes(pattern)) {
 				matches.push({ file: relative(root, file), line: i + 1, text: lines[i].trim().slice(0, 200) });
@@ -131,8 +154,9 @@ export async function grepFiles(opts: {
 	if (matches.length === 0) return state.capped ? `No matches found${CAPPED_MARKER}` : "No matches found";
 	let out = "";
 	for (const m of matches) out += `${m.file}:${m.line}: ${m.text}\n`;
-	out = truncate(out);
-	return state.capped ? `${out}${CAPPED_MARKER}` : out;
+	out = truncate(out, MAX_OUTPUT_BYTES, state.capped ? Buffer.byteLength(CAPPED_MARKER) : 0);
+	if (state.capped) out += CAPPED_MARKER;
+	return out;
 }
 
 export async function findFiles(opts: {
@@ -142,30 +166,42 @@ export async function findFiles(opts: {
 	cwd: string;
 	signal?: AbortSignal;
 }): Promise<string> {
+	throwIfAborted(opts.signal);
 	const root = await resolveRoot(opts.cwd, opts.path);
 	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
-	const files: string[] = [];
-	const state: WalkState = { visited: 0, capped: false };
-	await walk(root, files, state, opts.signal);
+	const { files, state } = await walkFiles(root, opts.signal);
+	if (state.rootError) return `Error: cannot read search root ${root}: ${state.rootError}`;
 	const needle = opts.pattern?.toLowerCase();
 	// Match against the RELATIVE path so a pattern matching an ancestor
 	// directory does not hit every file, and rendered output stays relative.
-	const rel = files.map((f) => relative(root, f));
-	const hits = needle ? rel.filter((r) => r.toLowerCase().includes(needle)) : rel;
+	const rel: string[] = [];
+	for (const f of files) {
+		throwIfAborted(opts.signal);
+		rel.push(relative(root, f));
+	}
+	const hits: string[] = [];
+	for (const r of rel) {
+		throwIfAborted(opts.signal);
+		if (!needle || r.toLowerCase().includes(needle)) hits.push(r);
+		if (hits.length >= (opts.maxResults ?? 100)) break;
+	}
 	if (hits.length === 0) return state.capped ? `No matching files found${CAPPED_MARKER}` : "No matching files found";
-	let out = truncate(hits.slice(0, opts.maxResults ?? 100).join("\n"));
+	let out = truncate(hits.join("\n"), MAX_OUTPUT_BYTES, state.capped ? Buffer.byteLength(CAPPED_MARKER) : 0);
 	if (state.capped) out += CAPPED_MARKER;
 	return out;
 }
 
-export async function listDir(opts: { path?: string; cwd: string }): Promise<string> {
+export async function listDir(opts: { path?: string; cwd: string; signal?: AbortSignal }): Promise<string> {
+	throwIfAborted(opts.signal);
 	const root = await resolveRoot(opts.cwd, opts.path);
 	if (!root) return `Error: directory not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	try {
 		const entries = await readdir(root);
+		throwIfAborted(opts.signal);
 		if (entries.length === 0) return "(empty directory)";
 		return truncate(entries.join("\n"));
 	} catch (error: any) {
+		if (error?.message === "Operation aborted") throw error;
 		return `Error listing ${root}: ${error.message}`;
 	}
 }
