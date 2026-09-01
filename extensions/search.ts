@@ -53,6 +53,7 @@ async function walk(dir: string, out: string[], state: WalkState, signal?: Abort
 	try {
 		entries = await readdir(dir);
 	} catch (error: any) {
+		throwIfAborted(signal); // cancellation wins over the fs error
 		if (depth === 0) state.rootError = error?.message ?? String(error);
 		return;
 	}
@@ -84,7 +85,7 @@ async function walk(dir: string, out: string[], state: WalkState, signal?: Abort
  */
 function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES, extraMarkerBytes = 0): string {
 	const buf = Buffer.from(text, "utf8");
-	if (buf.length <= maxBytes) return text;
+	if (buf.length + extraMarkerBytes <= maxBytes) return text;
 	const budget = maxBytes - Buffer.byteLength(TRUNCATE_MARKER) - extraMarkerBytes;
 	if (budget <= 0) return TRUNCATE_MARKER.trim();
 	const cut = buf.subarray(0, budget).toString("utf8");
@@ -93,12 +94,14 @@ function truncate(text: string, maxBytes = MAX_OUTPUT_BYTES, extraMarkerBytes = 
 	return `${cut.slice(0, lastNewline)}\n${TRUNCATE_MARKER}`;
 }
 
-async function resolveRoot(cwd: string, sub?: string): Promise<string | null> {
+async function resolveRoot(cwd: string, sub?: string, signal?: AbortSignal): Promise<string | null> {
 	const root = resolve(cwd, sub || ".");
 	try {
 		const st = await stat(root);
+		throwIfAborted(signal);
 		return st.isDirectory() ? root : null;
-	} catch {
+	} catch (error: any) {
+		throwIfAborted(signal);
 		return null;
 	}
 }
@@ -118,7 +121,7 @@ export async function grepFiles(opts: {
 	signal?: AbortSignal;
 }): Promise<string> {
 	throwIfAborted(opts.signal);
-	const root = await resolveRoot(opts.cwd, opts.path);
+	const root = await resolveRoot(opts.cwd, opts.path, opts.signal);
 	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const pattern = opts.caseSensitive ? opts.pattern : opts.pattern.toLowerCase();
 	const limit = opts.maxResults ?? 100;
@@ -130,14 +133,16 @@ export async function grepFiles(opts: {
 		if (matches.length >= limit) break;
 		try {
 			if ((await stat(file)).size > MAX_FILE_BYTES) continue; // cap only before reading content
-		} catch {
+		} catch (error: any) {
+			throwIfAborted(opts.signal);
 			continue;
 		}
 		throwIfAborted(opts.signal);
 		let content: string;
 		try {
 			content = await readFile(file, "utf8");
-		} catch {
+		} catch (error: any) {
+			throwIfAborted(opts.signal);
 			continue;
 		}
 		throwIfAborted(opts.signal);
@@ -167,7 +172,7 @@ export async function findFiles(opts: {
 	signal?: AbortSignal;
 }): Promise<string> {
 	throwIfAborted(opts.signal);
-	const root = await resolveRoot(opts.cwd, opts.path);
+	const root = await resolveRoot(opts.cwd, opts.path, opts.signal);
 	if (!root) return `Error: search path not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	const { files, state } = await walkFiles(root, opts.signal);
 	if (state.rootError) return `Error: cannot read search root ${root}: ${state.rootError}`;
@@ -193,7 +198,7 @@ export async function findFiles(opts: {
 
 export async function listDir(opts: { path?: string; cwd: string; signal?: AbortSignal }): Promise<string> {
 	throwIfAborted(opts.signal);
-	const root = await resolveRoot(opts.cwd, opts.path);
+	const root = await resolveRoot(opts.cwd, opts.path, opts.signal);
 	if (!root) return `Error: directory not found: ${resolve(opts.cwd, opts.path || ".")}`;
 	try {
 		const entries = await readdir(root);
@@ -201,7 +206,7 @@ export async function listDir(opts: { path?: string; cwd: string; signal?: Abort
 		if (entries.length === 0) return "(empty directory)";
 		return truncate(entries.join("\n"));
 	} catch (error: any) {
-		if (error?.message === "Operation aborted") throw error;
+		throwIfAborted(opts.signal);
 		return `Error listing ${root}: ${error.message}`;
 	}
 }
