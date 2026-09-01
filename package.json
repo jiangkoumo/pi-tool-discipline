@@ -1,6 +1,6 @@
 {
   "name": "pi-tool-discipline",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "pi extension: enforce ffgrep/fffind-first search discipline and neutralize the default bash file-operation guideline",
   "type": "module",
   "license": "MIT",
