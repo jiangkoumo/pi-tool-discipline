@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4facfe"/>
+      <stop offset="100%" stop-color="#00f2fe"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="80" y="80" width="1040" height="470" rx="24" fill="none" stroke="url(#accent)" stroke-width="3" opacity="0.5"/>
+  <text x="120" y="240" font-family="Menlo, monospace" font-size="72" font-weight="bold" fill="#ffffff">pi-tool-discipline</text>
+  <text x="120" y="310" font-family="Menlo, monospace" font-size="34" fill="#9fb3d9">enforce ffgrep/fffind-first search discipline</text>
+  <text x="120" y="380" font-family="Menlo, monospace" font-size="26" fill="#6b84b5">$ pi install npm:pi-tool-discipline</text>
+  <text x="120" y="470" font-family="Menlo, monospace" font-size="22" fill="#4a6185">✓ neutralizes "Use bash for file operations like ls, rg, find"</text>
+  <text x="120" y="505" font-family="Menlo, monospace" font-size="22" fill="#4a6185">✓ injects search-tool discipline into every session</text>
+</svg>

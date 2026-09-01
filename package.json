@@ -1,0 +1,49 @@
+{
+  "name": "pi-tool-discipline",
+  "version": "0.1.0",
+  "description": "pi extension: enforce ffgrep/fffind-first search discipline and neutralize the default bash file-operation guideline",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jiangkoumo/pi-tool-discipline.git"
+  },
+  "homepage": "https://github.com/jiangkoumo/pi-tool-discipline",
+  "bugs": {
+    "url": "https://github.com/jiangkoumo/pi-tool-discipline/issues"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "ffgrep",
+    "fffind",
+    "grep",
+    "search",
+    "discipline"
+  ],
+  "pi": {
+    "extensions": ["./extensions/index.ts"]
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@sinclair/typebox": "*",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}
