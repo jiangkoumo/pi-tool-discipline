@@ -19,7 +19,7 @@ tool, not bash").
 
 ## How it works
 
-Two mechanisms, applied automatically in every session:
+Three mechanisms, applied automatically in every session:
 
 1. **Activate search tools (root fix).** pi 0.84+ ships real `grep` / `find` /
    `ls` built-in tool definitions but only activates `read`/`bash`/`edit`/
@@ -34,10 +34,17 @@ Two mechanisms, applied automatically in every session:
 2. **System-prompt injection (rules).** On every agent start, appends an
    idempotent "Tool Discipline" section to the system prompt: content search
    with `ffgrep`, path search with `fffind`, file reads with `read`
-   (offset/limit), no bash `grep`/`rg`/`find`/`ls`/`cat`/`sed`/`head`/`tail`/
-   `which` for searching, bash reserved for pipelines/git/npm/network, `rg`
-   (never `grep`) as the last resort. Also strips the bash guideline text as
+   (offset/limit), no bash `grep`/`find`/`ls`/`cat`/`sed`/`head`/`tail`/
+   `which` for searching or reading, bash reserved for pipelines/git/npm/network, `rg`
+   (never `grep`) as the last resort in pipelines. Also strips the bash guideline text as
    a belt-and-suspenders fallback.
+3. **Runtime Guardrail (interception).** Intercepts `tool_call` events for
+   `bash` and `powershell`. If the model attempts to invoke prohibited file
+   operations (`ls`, `cat`, `grep`, `find`, `sed`, `which`, or unpiped
+   `head`/`tail` directly on files), execution is blocked at runtime with
+   actionable feedback guiding the model to use the proper tool (`read`,
+   `ffgrep`, `fffind`, `ls`, etc.), while safely preserving legitimate builds,
+   tests, git operations, and pipelines.
 
 ## Install
 

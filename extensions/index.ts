@@ -29,6 +29,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { grepFiles, findFiles, listDir, grepSchema, findSchema, lsSchema } from "./search.js";
 import { stripBashGuidelines } from "./strip.js";
+import { checkDisciplineViolation } from "./guard.js";
 
 const MARK = "<!-- pi-tool-discipline:v1 -->";
 
@@ -149,6 +150,24 @@ export default function toolDiscipline(pi: ExtensionAPI) {
 		if (systemPrompt.includes(MARK)) return; // already injected
 		const prompt = stripBashGuidelines(systemPrompt);
 		return { systemPrompt: `${prompt}\n${MARK}\n${DISCIPLINE}` };
+	});
+
+	// C. Runtime Guardrail: intercept and block prohibited bash file operations.
+	pi.on("tool_call", async (event) => {
+		if (event.toolName === "bash" || event.toolName === "powershell") {
+			const command = (event.input as { command?: string })?.command;
+			if (typeof command === "string") {
+				const dialect = event.toolName === "powershell" ? "powershell" : "bash";
+				const check = checkDisciplineViolation(command, dialect);
+				if (check.block) {
+					return {
+						block: true,
+						reason: check.reason,
+					};
+				}
+			}
+		}
+		return undefined;
 	});
 
 	// Status command: /tool-discipline — verify tool activation and injection.
