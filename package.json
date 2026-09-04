@@ -1,7 +1,7 @@
 {
   "name": "pi-tool-discipline",
-  "version": "0.1.16",
-  "description": "pi extension: enforce ffgrep/fffind-first search discipline and neutralize the default bash file-operation guideline",
+  "version": "0.2.0",
+  "description": "pi extension (prompt-level): enforce ffgrep/fffind-first search discipline and neutralize the default bash file-operation guideline",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -38,16 +38,14 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types test/fallback.test.mjs && node --experimental-strip-types test/guard.test.mjs"
+    "test": "node --experimental-strip-types test/strip.test.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": ">=0.84"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@types/node": "^22.0.0",
-    "typebox": "*",
     "typescript": "^5.0.0"
   }
 }

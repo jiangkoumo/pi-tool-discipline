@@ -1,11 +1,9 @@
 # pi-tool-discipline
 
-<p align="center">
-  <img src="assets/banner.png" alt="pi-tool-discipline" width="600">
-</p>
-
 pi extension that enforces a **search-tools-first discipline** and removes the
 conflicting "use bash for file operations" guidance pi injects by default.
+**Prompt-level only: it activates the right tools and edits the system prompt;
+it does not intercept or parse bash commands.**
 
 ## Why
 
@@ -19,18 +17,14 @@ tool, not bash").
 
 ## How it works
 
-Three mechanisms, applied automatically in every session:
+Two mechanisms, applied automatically in every session:
 
-1. **Activate search tools (root fix).** pi 0.84+ ships real `grep` / `find` /
+1. **Activate search tools (root fix).** pi >= 0.84 ships real `grep` / `find` /
    `ls` built-in tool definitions but only activates `read`/`bash`/`edit`/
    `write` by default. This extension activates the built-ins, so pi's
    `hasGrep`/`hasFind`/`hasLs` check passes and the conflicting
    `Use bash for file operations like ls, rg, find` guideline is **never
-   generated** — the model is never told to use bash for searching. On older
-   pi versions without these built-ins, fs-based fallbacks
-   (`extensions/search.ts`) are registered instead, with their text snippet
-   suppressed while `ffgrep`/`fffind` from pi-fff are active (the registered
-   tool schema remains present either way).
+   generated** — the model is never told to use bash for searching.
 2. **System-prompt injection (rules).** On every agent start, appends an
    idempotent "Tool Discipline" section to the system prompt: content search
    with `ffgrep`, path search with `fffind`, file reads with `read`
@@ -38,13 +32,22 @@ Three mechanisms, applied automatically in every session:
    `which` for searching or reading, bash reserved for pipelines/git/npm/network, `rg`
    (never `grep`) as the last resort in pipelines. Also strips the bash guideline text as
    a belt-and-suspenders fallback.
-3. **Runtime Guardrail (interception).** Intercepts `tool_call` events for
-   `bash` and `powershell`. If the model attempts to invoke prohibited file
-   operations (`ls`, `cat`, `grep`, `find`, `sed`, `which`, or unpiped
-   `head`/`tail` directly on files), execution is blocked at runtime with
-   actionable feedback guiding the model to use the proper tool (`read`,
-   `ffgrep`, `fffind`, `ls`, etc.), while safely preserving legitimate builds,
-   tests, git operations, and pipelines.
+
+## Why no bash interception?
+
+Earlier versions (<= 0.1.x) added a runtime guard: a hand-written
+bash/PowerShell command parser that blocked prohibited file operations at
+`tool_call` time. Maintaining a parser that precisely recognizes nested
+subshells, here-docs, wrappers and redirects — without misjudging legitimate
+pipelines — grew to ~1000 lines and became a hang/freeze risk (a stray `)` in
+a command could spin the event loop at 100% CPU, freezing the whole session).
+
+Behavior guidance at the prompt level is probabilistic but safe; code-level
+enforcement would require near-complete shell parsing — impractical and
+hazardous. The activation + injection mechanisms above already remove the
+root cause (pi no longer tells the model to use bash), so interception added
+little value. This version drops it entirely: no command parsing, no
+interception, no hang surface.
 
 ## Install
 
@@ -54,14 +57,14 @@ pi install npm:pi-tool-discipline
 pi -e npm:pi-tool-discipline
 ```
 
-Requires nothing extra. With `@ff-labs/pi-fff` installed, the model prefers
-`ffgrep`/`fffind`; without it, Pi's built-in `grep`/`find`/`ls` tools (activated
-by this extension, or fs-based fallbacks on older pi versions) are used.
+Requires **pi >= 0.84** (built-in `grep`/`find`/`ls` definitions). With
+`@ff-labs/pi-fff` installed, the model prefers `ffgrep`/`fffind`; without it,
+Pi's built-in `grep`/`find`/`ls` tools (activated by this extension) are used.
 
 ## Verify
 
-Run `/tool-discipline` in a pi session — it reports whether the placeholder
-tools are registered and whether the discipline section is injected.
+Run `/tool-discipline` in a pi session — it reports whether the search tools
+are registered/active and whether the discipline section is injected.
 
 You can also inspect the system prompt: the string
 `Use bash for file operations like ls, rg, find` should no longer appear, and
@@ -72,18 +75,8 @@ You can also inspect the system prompt: the string
 This extension runs with full system access like any pi extension. What it does:
 - Activates pi's built-in `grep`/`find`/`ls` tools (read-only file search).
 - Injects text into the system prompt (discipline rules).
-- On pi versions without built-in search tools, registers read-only fs-based
-  fallback implementations that read file contents under the searched path.
 
-**Disclosure:** pi's built-in `grep`/`find` tools execute the `rg`/`fd`
-binaries, and pi may auto-download those binaries from GitHub on first use
-(`ensureTool`). This extension itself does not execute commands, write files,
-or touch the network — that claim covers only its own fs-based fallback
-implementations, not the pi built-ins it activates.
-
-The fallback search tools only read. Note that any installed tool, including
-this one, can be invoked by the model. Review the source in `extensions/`
-before installing.
+It executes no commands, writes no files, and touches no network.
 
 ## License
 
